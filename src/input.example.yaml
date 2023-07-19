@@ -1,0 +1,11 @@
+jobs:
+  - name: "My job"
+    id: x
+    command: "node"
+    params:
+      - "-r"
+      - "@swc-node/register"
+      - "scripts/seed.ts"
+    description: "My job description"
+    context: |
+      This is a daemon job
