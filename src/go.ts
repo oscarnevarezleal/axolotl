@@ -11,7 +11,8 @@ import { promisify } from 'util'
 import { chomp } from '@rauschma/stringio'
 import { streamWrite, onExit } from '@rauschma/stringio'
 import combineAsyncIterators from 'combine-async-iterators'
-import { Job } from './types';
+import { Job, PromptWithInfo } from './types';
+import { removeUnicode } from './io/utils';
 const sleep = promisify(setTimeout)
 const EOL = '\n'
 
@@ -115,10 +116,7 @@ export class CliReader {
 
       // strip away the color of the terminal
       // along any unicode characters
-      let clean = chunk
-        .toString()
-        .replace(/\x1B[[(?);]{0,2}(;?\d)*./g, '')
-        .replace(/[\x00-\x08\x0E-\x1F\x7F-\uFFFF]/g, '')
+      let clean = removeUnicode(chunk.toString())
 
       let lines = clean.split(EOL).map((l: string) => chomp(l.trim()))
 
@@ -127,7 +125,7 @@ export class CliReader {
       while (lines.length > 0) {
         const line = lines.shift()
         if (line) {
-          const lookupKeys = this.params.job?.robot?.attention || []
+          const lookupKeys = this.params.job?.interaction?.attention || []
           // this.logger.debug('lookupKeys: ', lookupKeys)
 
           const lookUpIndex = lookupKeys.findIndex((p) => line.indexOf(p) > -1)
@@ -216,8 +214,7 @@ export class CliReader {
 
     // ---
 
-    const prompts: string[] | { name: string; value: string }[] =
-      job?.robot?.prompts || []
+    const prompts: string[] | PromptWithInfo[] = job?.interaction?.prompts || []
 
     const iterators = combineAsyncIterators(
       this.chunksPromptsToLinesAsync(this.child_process.stdout),

@@ -1,7 +1,10 @@
 import { chomp } from '@rauschma/stringio';
 import * as child_process from 'child_process';
 import { emitKeypressEvents } from 'node:readline';
-import { Job } from '../types';
+import { parse } from 'path';
+import { mergeSort } from '../utils/timeserie';
+import { IoRecord, Job, Prompt, PromptWithInfo } from '../types';
+import { removeUnicode } from '../io/utils';
 
 /**
  * 
@@ -21,10 +24,8 @@ export class CliLearnObserver {
     inputTimeline: Record<number, number[]> = {}
     outputTimeline: Record<number, string> = {}
     child_process: any
+    connectedAt: number | undefined;
     async observe() {
-
-        // This needs to be moved to function and condition with a flag setting
-
 
         const isRawMode = true
         const command = this.args[0]
@@ -33,9 +34,10 @@ export class CliLearnObserver {
         const child = child_process.spawn(command, this.args.slice(1))
 
         child.stdout.on('connection', () => {
-            console.log('connection')
+            // This needs to be moved to function and condition with a flag setting
             process.stdout.clearLine(0)
             process.stdout.cursorTo(0)
+            this.connectedAt = Date.now()
         })
 
         child.stdout.on('data', (chunk: any) => {
@@ -78,55 +80,73 @@ export class CliLearnObserver {
         process.stdin.pipe(child.stdin);
 
         child.on('exit', () => {
-            console.log('exit', this.inputTimeline)
+            this.dumpHistory()
             process.exit()
         })
 
 
         this.child_process = child
     }
-    mergeHistory() {
+    mergeHistory(): IoRecord[] {
 
         // get object keys
         const sortedInputKeys = Object.keys(this.inputTimeline).sort()
         const sortedOutputKeys = Object.keys(this.outputTimeline).sort()
         const mergedSortKeys = [...sortedInputKeys, ...sortedOutputKeys].sort()
 
-        // @todo merge the input and output history
-        const mapped = mergedSortKeys.map((value) => {
+        return mergedSortKeys.map((value, index: number) => {
             const accessKey = value as unknown as number
+            let type: 'input' | 'output' = 'input'
             let timelineItem: string | number[] = this.inputTimeline[accessKey] ?? this.outputTimeline[accessKey]
             if (Array.isArray(timelineItem)) { //input keys
+                type = 'input'
                 timelineItem = timelineItem.map((c: number) => String.fromCharCode(c)).join('')
-            } else {
+            } else { // output keys
+                type = 'output'
                 timelineItem = chomp(timelineItem) as string
             }
-            return { [value]: timelineItem } as Record<number, string>
+            return new IoRecord({
+                type,
+                timestamp: accessKey,
+                value: timelineItem,
+                nearestBefore: index === 0 ? undefined : {
+                    index: index - 1,
+                    timestamp: mergedSortKeys[index - 1] as unknown as number
+                }
+            })
         })
-        return mapped
     }
     dumpHistory() {
         process.stdout.clearLine(0)
         process.stdout.cursorTo(0)
-        console.log(JSON.stringify(this.mergeHistory(), null, 2))
+        const history = this.mergeHistory()
         const job: Job = {
             command: this.args[0],
             params: this.args.slice(1),
-            context: 'This is a daemon job'
+            context: {
+                name: 'My job',
+                startedAt: this.connectedAt
+            },
+            interaction: {
+                prompts: history
+                    .filter((record) => record.props.type === 'input')
+                    .map((record) => {
+                        const nearest = record.props.nearestBefore
+                        const { value, timestamp } = record.props
+                        let name = 'prompt'
+                        if (nearest) {
+                            name = removeUnicode(history[nearest.index].props.value)
+                        }
+                        return {
+                            name,
+                            value,
+                            timestamp
+                        } as Prompt
+                    }),
+                attention: []
+            }
         }
-        console.log(job)
-        // @todo save to file or display the history as a reusable yaml
-        // using this format: 
-        // - name: "My job"
-        //     id: x
-        //     command: "node"
-        //     params:
-        //     - "-r"
-        //     - "@swc-node/register"
-        //     - "scripts/seed.ts"
-        //     description: "My job description"
-        //     context: |
-        //     This is a daemon job
+        console.log(JSON.stringify(job, null, 3))
     }
     recordLine(line: any) {
         this.inputTimeline[Date.now()] = line.split('').map((c: string) => c.charCodeAt(0))
