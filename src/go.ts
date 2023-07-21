@@ -11,6 +11,7 @@ import { promisify } from 'util'
 import { chomp } from '@rauschma/stringio'
 import { streamWrite, onExit } from '@rauschma/stringio'
 import combineAsyncIterators from 'combine-async-iterators'
+import { Job } from './types';
 const sleep = promisify(setTimeout)
 const EOL = '\n'
 
@@ -19,17 +20,7 @@ export interface CliReaderProps {
   command: string
   params: string[]
   settings?: Record<string, boolean | string | null>
-  job: {
-    command: string
-    params: string[]
-    context: string
-    conclusion?: string
-    output_instructions?: string
-    robot?: {
-      prompts: string[]
-      attention: string[]
-    }
-  }
+  job: Job
 }
 export class CliReader {
   wereDoneReadingStdin: boolean = false

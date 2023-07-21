@@ -1,10 +1,20 @@
 #!/usr/bin/env node
 
 import { handler as mainHandler } from './go'
+import { handler as learnCommand } from './commands/learn_command'
 
 require('yargs')
   .scriptName('axo')
   .usage('$0 <cmd> [args]')
+  .command('learn [command]',
+    'learn about a command',
+    (yargs: any) => {
+      yargs.positional('command', {
+        type: 'string',
+        default: 'the_command_name',
+        describe: 'the name of the command to learn about',
+      })
+    }, learnCommand)
   .command(
     'run [seed]',
     'ahoi!',

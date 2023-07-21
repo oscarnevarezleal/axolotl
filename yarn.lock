@@ -60,6 +60,11 @@
   "resolved" "https://registry.npmjs.org/@types/node/-/node-10.17.60.tgz"
   "version" "10.17.60"
 
+"@types/node@^20.4.2":
+  "integrity" "sha512-Dd0BYtWgnWJKwO1jkmTrzofjK2QXXcai0dmtzvIBhcA+RsG5h8R3xlyta0kGOZRNfL9GuRtb1knmPEhQrePCEw=="
+  "resolved" "https://registry.npmjs.org/@types/node/-/node-20.4.2.tgz"
+  "version" "20.4.2"
+
 "ansi-regex@^5.0.1":
   "integrity" "sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ=="
   "resolved" "https://registry.npmjs.org/ansi-regex/-/ansi-regex-5.0.1.tgz"
