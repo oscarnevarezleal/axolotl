@@ -17,6 +17,9 @@ const ASSISTANT_CONTEXT_CLI =
   'When you are asked to set a property you should answer with the value of that property taken from the original JSON object'
 
 export async function getInputPrompt(prompt: string): Promise<string> {
+
+  console.log('getInputPrompt', prompt)
+
   const openai = new OpenAIApi(configuration)
 
   const response = await openai.createChatCompletion({
@@ -67,6 +70,7 @@ export class AwareChat {
   }
 
   async chat(prompt: string): Promise<string | null> {
+    // console.log('chat', prompt)
     try {
       const messages = [
         ...this.messages,

@@ -34,6 +34,7 @@ export class CliReader {
   lastAnswerTime: number = 0
   mutex: any
   pendingAnswerLock: any
+  enableGpt: boolean = false
   awareChat: AwareChat
   verbose: number
   logger: {
@@ -124,17 +125,17 @@ export class CliReader {
 
       while (lines.length > 0) {
         const line = lines.shift()
-        if (line) {
+        if (line && line.length > 0) {
           const lookupKeys = this.params.job?.interaction?.attention || []
           // this.logger.debug('lookupKeys: ', lookupKeys)
 
           const lookUpIndex = lookupKeys.findIndex((p) => line.indexOf(p) > -1)
 
-          if (lookUpIndex) {
+          if (lookUpIndex > -1) {
             const lookUpValue = lookupKeys[lookUpIndex]
             this.logger.debug(chalk.gray('[ATTN] 👀 ', lookUpValue))
             // Send the full line to the chat
-            await this.awareChat.chat(
+            await this.chat(
               `Mind the following log content for futher reference: ${lookUpIndex} = ${line.substring(
                 lookUpIndex
               )}`
@@ -176,6 +177,12 @@ export class CliReader {
     // there will be no more data in the stream
     this.wereDoneReadingStdin = true
   }
+  chat(arg0: string) {
+    if(!this.enableGpt){
+      return
+    }
+    return this.awareChat.chat(arg0)
+  }
 
   async processCommand() {
     const { settings, job } = this.params
@@ -186,31 +193,34 @@ export class CliReader {
       stdio: ['pipe', 'pipe', 'pipe'],
     })
 
-    // this.logger.debug('Settings', settings)
-    this.logger.debug('Context', job.context)
-
     let response = {}
 
-    // We should check if chatgpt is enabled here
-    try {
-      response = await getInputPrompt(job.context)
-    } catch (error:any) {
-      if (error?.response) {
-        this.logger.debug(error?.response?.status)
-        this.logger.debug(error?.response?.data)
-      } else {
-        this.logger.debug(error?.message)
+    if (job.context) {
+      // this.logger.debug('Settings', settings)
+      this.logger.debug('Context', job.context)
+      // We should check if chatgpt is enabled here
+      try {
+        response = await getInputPrompt(job.context)
+      } catch (error: any) {
+        if (error?.response) {
+          this.logger.debug(error?.response?.status)
+          this.logger.debug(error?.response?.data)
+        } else {
+          this.logger.debug(error?.message)
+        }
+        return null
       }
-      return null
+
+      // this.logger.debug(chalk.yellow(response?.content))
+      this.awareChat = new AwareChat(
+        `The following is a valid JSON output. 
+        ${JSON.stringify(response?.content)}
+        `
+      )
     }
 
-    // this.logger.debug(chalk.yellow(response?.content))
 
-    this.awareChat = new AwareChat(
-      `The following is a valid JSON output. 
-      ${JSON.stringify(response?.content)}
-      `
-    )
+    
 
     // ---
 
@@ -257,6 +267,7 @@ export class CliReader {
         | string
         | {
           name: string
+          skip: boolean
           value?: string | undefined
           hidden?: boolean
         } = prompts[promptIndex]
@@ -266,18 +277,18 @@ export class CliReader {
 
         let answer = ''
 
-        // this.logger.debug('[PROMPT] ❔', prompt?.name)
+        this.logger.debug('[PROMPT] ❔', prompt?.name)
         // we have a defined answer, let's use it
         if (prompt?.value) {
           answer = prompt?.value
-          await this.awareChat.chat(
+          await this.chat(
             `Please mind when asked to ${ll}, the answer will be "${answer}"`
           )
         } else {
           if (prompt?.skip) {
             answer = ''
           } else {
-            answer = (await this.awareChat.chat(prompt?.name)) ?? ''
+            answer = (await this.chat(prompt?.name)) ?? ''
           }
         }
 
@@ -289,13 +300,13 @@ export class CliReader {
     }
 
     if (job.conclusion && job.conclusion !== '') {
-      const conclusion = await this.awareChat.chat(job.conclusion)
+      const conclusion = await this.chat(job.conclusion)
       this.logger.debug('Conclusion: \n', conclusion ?? '')
     }
 
     // Print the output of the job if any
     if (job.output_instructions && job.output_instructions !== '') {
-      const output = await this.awareChat.chat(job.output_instructions)
+      const output = await this.chat(job.output_instructions)
       this.logger.log(output ?? '')
     }
 
@@ -349,6 +360,9 @@ export async function handler({
   const config_file_content = readConfigFile(file);
 
   const { jobs } = YAML.parse(config_file_content)
+
+  console.log(`Running ${seed}`)
+  console.log('jobs', jobs)
 
   const job = jobs.find((j: any) => j?.id === seed)
 

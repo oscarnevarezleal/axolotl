@@ -1,10 +1,9 @@
 import { chomp } from '@rauschma/stringio';
 import * as child_process from 'child_process';
 import { emitKeypressEvents } from 'node:readline';
-import { parse } from 'path';
-import { mergeSort } from '../utils/timeserie';
-import { IoRecord, Job, Prompt, PromptWithInfo } from '../types';
 import { removeUnicode } from '../io/utils';
+import { IoRecord, Job, Prompt } from '../types';
+import { writeYaml } from '../io/yamlWritter';
 
 /**
  * 
@@ -29,7 +28,11 @@ export class CliLearnObserver {
 
         const isRawMode = true
         const command = this.args[0]
-        console.log(command, this.args.slice(1))
+
+        if (!command) {
+            console.error('No command given')
+            process.exit(1)
+        }
 
         const child = child_process.spawn(command, this.args.slice(1))
 
@@ -121,24 +124,38 @@ export class CliLearnObserver {
         process.stdout.cursorTo(0)
         const history = this.mergeHistory()
         const job: Job = {
+            id: 'axo',
             command: this.args[0],
             params: this.args.slice(1),
-            context: {
-                name: 'My job',
-                startedAt: this.connectedAt
-            },
+            settings: [
+                {
+                    name: 'exitOnMatch',
+                    value: 'An error occurred'
+                }
+            ],
+            // context: {
+            //     name: 'My job',
+            //     startedAt: this.connectedAt
+            // },
             interaction: {
                 prompts: history
                     .filter((record) => record.props.type === 'input')
                     .map((record) => {
                         const nearest = record.props.nearestBefore
-                        const { value, timestamp } = record.props
+                        const { timestamp } = record.props
+                        let value: string | undefined = record.props.value
+                        let skip = false
                         let name = 'prompt'
                         if (nearest) {
                             name = removeUnicode(history[nearest.index].props.value)
                         }
+                        if (value === '\t\r' || value === '\n') {
+                            value = undefined
+                            skip = true
+                        }
                         return {
                             name,
+                            skip,
                             value,
                             timestamp
                         } as Prompt
@@ -146,7 +163,9 @@ export class CliLearnObserver {
                 attention: []
             }
         }
-        console.log(JSON.stringify(job, null, 3))
+        const file = `${process.cwd()}/axo.yaml`
+        writeYaml(file, { jobs: [job] })
+        console.log('Wrote job to', file)
     }
     recordLine(line: any) {
         this.inputTimeline[Date.now()] = line.split('').map((c: string) => c.charCodeAt(0))

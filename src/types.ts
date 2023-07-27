@@ -21,9 +21,11 @@ export type JobContextWithInfo = {
 export type JobContext = string | JobContextWithInfo
 
 export interface Job {
+    id: string
     command: string
     params: string[]
-    context: JobContext
+    settings: any[]
+    context?: JobContext
     conclusion?: string
     output_instructions?: string
     interaction?: {
