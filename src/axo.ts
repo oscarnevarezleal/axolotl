@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { handler as mainHandler } from './go'
-import { handler as learnCommand } from './commands/learn_command'
+import { handler as mainHandler } from './commands/run_cmd'
+import { handler as learnCommand } from './commands/learn_cmd'
 
 require('yargs')
   .scriptName('axo')

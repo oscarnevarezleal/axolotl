@@ -1,4 +1,4 @@
-import { Configuration, OpenAIApi } from 'openai'
+import { ChatCompletionResponseMessage, Configuration, OpenAIApi } from 'openai'
 
 const configuration = new Configuration({
   apiKey:
@@ -16,7 +16,7 @@ const ASSISTANT_CONTEXT_CLI =
   'You are fed with an initial JSON object. ' +
   'When you are asked to set a property you should answer with the value of that property taken from the original JSON object'
 
-export async function getInputPrompt(prompt: string): Promise<string> {
+export async function getInputPrompt(prompt: string): Promise<string|ChatCompletionResponseMessage|undefined> {
 
   console.log('getInputPrompt', prompt)
 
@@ -46,7 +46,7 @@ export async function getInputPrompt(prompt: string): Promise<string> {
 
 export class AwareChat {
   openai: any
-  messages: { role: string; content: string }[] = []
+  messages: { role: string; content: string }[] | ChatCompletionResponseMessage[] = []
 
   constructor(context: string) {
     const { Configuration, OpenAIApi } = require('openai')
@@ -92,17 +92,18 @@ export class AwareChat {
         presence_penalty: 0,
       })
 
-      const textResponse = response.data.choices[0].message
+      const textResponse: ChatCompletionResponseMessage | undefined = response.data.choices[0]?.message
 
       // console.log('textResponse', textResponse)
 
       this.messages = [
         ...this.messages,
         { role: 'user', content: prompt },
-        textResponse,
+        { role: 'assistant', content: textResponse?.content ?? '' },
       ]
 
-      return textResponse?.content
+      return textResponse?.content ?? ''
+
     } catch (error: any) {
       if (error?.response) {
         console.log(error?.response?.status)

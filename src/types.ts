@@ -1,6 +1,8 @@
 export interface PromptWithInfo {
     name: string;
     value: string;
+    skip?: boolean;
+    hidden?: boolean;
 }
 
 export interface PromptWithInfoAndDate extends PromptWithInfo {
