@@ -4,13 +4,14 @@ import * as fs from 'fs';
 
 import * as child_process from 'child_process';
 
-import { AwareChat, getInputPrompt } from '../openai';
+import { AwareChat, getInputPrompt } from '../ai/openai';
 
 import { chomp, onExit, streamWrite } from '@rauschma/stringio';
 import combineAsyncIterators from 'combine-async-iterators';
 import { promisify } from 'util';
-import { Job, Prompt } from '../types';
+import { JobItem, Prompt } from '../types';
 import { removeUnicode } from './utils';
+import { isString } from '../utils/safeguards';
 const sleep = promisify(setTimeout)
 const EOL = '\n'
 
@@ -29,10 +30,10 @@ export function readConfigFile(file: string | undefined) {
 
 export interface CliReaderProps {
     verbose: number
-    command: string
-    params: string[]
-    settings?: Record<string, boolean | string | null>
-    job: Job
+    // command: string
+    // params: string[]
+    // settings?: Record<string, boolean | string | null>
+    job: JobItem
 }
 export class CliReader {
     wereDoneReadingStdin: boolean = false
@@ -57,23 +58,14 @@ export class CliReader {
     }
 
     constructor(private params: CliReaderProps) {
+
+        const { command, params: jobParams } = params.job.job
+
         this.verbose = params.verbose
         this.mutex = new Mutex()
         this.pendingAnswerLock = new Mutex()
-        this.logger = {
-            VERBOSE_LEVEL: params.verbose,
-            log: (...args: string[]) => console.log.apply(console, args),
-            warn: (...args: string[]) => {
-                params.verbose >= 0 && console.log.apply(console, args)
-            },
-            info: (...args: string[]) => {
-                params.verbose >= 1 && console.log.apply(console, args)
-            },
-            debug: (...args: string[]) => {
-                params.verbose >= 2 && console.log.apply(console, args)
-            },
-        }
-        this.logger.debug(chalk.blue(params.command, params.params?.join(' ')))
+        this.logger = createLogger(this.verbose)
+        this.logger.debug(chalk.blue(command, jobParams?.join(' ')))
     }
 
     async writeToWritable(what: string): Promise<any> {
@@ -84,6 +76,7 @@ export class CliReader {
     }
 
     async *healthCheckPing(interval: number) {
+        const settings = this.params.job.settings || {}
         while (!this.wereDoneReadingStdin) {
             await sleep(interval) // our checkpoint interval
             this.lastTickCheck = Date.now()
@@ -92,11 +85,10 @@ export class CliReader {
             if (diff > interval) {
                 // Hit enter to keep the process flowing
                 this.logger.debug('[INFO] ENTER')
-                if (this.params?.settings?.hitEnterWhenNoStdout) {
+                if (settings?.hitEnterWhenNoStdout) {
                     await this.answer(EOL)
                 }
             }
-
             yield null
         }
     }
@@ -117,6 +109,12 @@ export class CliReader {
             throw new Error('Parameter is not an asynchronous iterable')
         }
         let previous = ''
+
+        
+
+        const settings = this.params.job.settings
+        const exitOnMatch = settings.exitOnMatch
+        const exitOnMatchIsString = isString(exitOnMatch)
 
         for await (const chunk of chunks) {
             // this.logger.debug('Waiting for mutex')
@@ -139,7 +137,7 @@ export class CliReader {
             while (lines.length > 0) {
                 const line = lines.shift()
                 if (line && line.length > 0) {
-                    const lookupKeys = this.params.job?.interaction?.attention || []
+                    const lookupKeys = this.params.job.job?.interaction?.attention || []
                     // this.logger.debug('lookupKeys: ', lookupKeys)
 
                     const lookUpIndex = lookupKeys.findIndex((p) => line.indexOf(p) > -1)
@@ -156,6 +154,7 @@ export class CliReader {
                     }
 
                     // @to-do this is a hacky way to detect a question and answer
+                    // we should use a proper NLP library to detect questions or AI
                     if (
                         this.lastQuestion !== '' &&
                         this.lastAnswer !== '' &&
@@ -169,13 +168,10 @@ export class CliReader {
                     yield line
 
                     // This setting allow to stop the process when a certain string is found
-                    const exitOnMatch =
-                        typeof this.params?.settings?.exitOnMatch === 'string' &&
-                        this.params?.settings?.exitOnMatch !== ''
                     if (
                         exitOnMatch &&
-                        typeof this.params?.settings?.exitOnMatch === 'string' &&
-                        line.indexOf(this.params?.settings?.exitOnMatch) > -1
+                        exitOnMatchIsString &&
+                        line.indexOf(exitOnMatch) > -1
                     ) {
                         // this.logger.debug('exitOnMatch', this.params?.settings?.exitOnMatch)
                         this.logger.warn('The process will be terminated now.')
@@ -193,19 +189,22 @@ export class CliReader {
     }
     chat(arg0: string) {
         if (!this.enableGpt) {
+            this.logger.warn('GPT is not enabled')
             return
         }
         if (!this.awareChat) {
+            this.logger.warn('awareChat is not initialized')
             return
         }
         return this.awareChat.chat(arg0)
     }
 
     async processCommand() {
-        const { settings, job } = this.params
         const { params } = this
+        const { job: jobItem } = this.params
+        const { job } = jobItem
 
-        this.child_process = child_process.spawn(params.command, params.params, {
+        this.child_process = child_process.spawn(job.command, job.params, {
             shell: false,
             stdio: ['pipe', 'pipe', 'pipe'],
         })
@@ -246,6 +245,7 @@ export class CliReader {
         const prompts: Prompt[] = job?.interaction?.prompts || []
 
         const iterators = combineAsyncIterators(
+            // @ts-ignore - this is a valid async iterator
             this.chunksPromptsToLinesAsync(this.child_process.stdout),
             this.healthCheckPing(3000)
         )
@@ -300,6 +300,8 @@ export class CliReader {
                     if (prompt?.skip) {
                         answer = ''
                     } else {
+                        // @todo cast properly
+                        // @ts-ignore
                         answer = (await this.chat(prompt?.name)) ?? ''
                     }
                 }
@@ -313,13 +315,13 @@ export class CliReader {
 
         if (job.conclusion && job.conclusion !== '') {
             const conclusion = await this.chat(job.conclusion)
-            this.logger.debug('Conclusion: \n', conclusion ?? '')
+            // this.logger.debug('Conclusion: \n', conclusion ?? '')
         }
 
         // Print the output of the job if any
         if (job.output_instructions && job.output_instructions !== '') {
             const output = await this.chat(job.output_instructions)
-            this.logger.log(output ?? '')
+            // this.logger.log(output ?? '')
         }
 
         // It is important to wait for the process to exit
@@ -351,5 +353,21 @@ export class CliReader {
             // The answer is hidden from the terminal so there is nothing to wait for
             await this.pendingAnswerLock.release()
         }
+    }
+}
+
+function createLogger(verbose: number): { VERBOSE_LEVEL: number; log: (...args: string[]) => void; warn: (...args: string[]) => void; info: (...args: string[]) => void; debug: (...args: string[]) => void; } {
+    return {
+        VERBOSE_LEVEL: verbose,
+        log: (...args: string[]) => console.log.apply(console, args),
+        warn: (...args: string[]) => {
+            verbose >= 0 && console.log.apply(console, args)
+        },
+        info: (...args: string[]) => {
+            verbose >= 1 && console.log.apply(console, args)
+        },
+        debug: (...args: string[]) => {
+            verbose >= 2 && console.log.apply(console, args)
+        },
     }
 }

@@ -9,6 +9,11 @@ require('yargs')
   .command('learn [command]',
     'learn about a command',
     (yargs: any) => {
+      yargs.option('i', {
+        alias: 'input',
+        describe: 'Default inputs to use',
+        type: 'array'
+      });
       yargs.positional('command', {
         type: 'string',
         default: 'the_command_name',

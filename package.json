@@ -1,7 +1,6 @@
 {
   "name": "@oscarnevarezleal/axolotl",
-  "version": "1.0.0",
-  "description": "",
+  "version": "1.0.1",
   "main": "dist/src/axo.js",
   "bin": {
     "axolotl": "dist/src/axo.js"
@@ -31,9 +30,11 @@
     "async-mutex": "^0.4.0",
     "chalk": "^4.1.2",
     "combine-async-iterators": "^2.0.1",
+    "get-substrings-by-mask": "^1.0.0",
     "js-yaml": "^4.1.0",
     "openai": "^3.3.0",
     "yaml": "^2.3.1",
     "yargs": "^17.7.2"
-  }
+  },
+  "description": ""
 }
