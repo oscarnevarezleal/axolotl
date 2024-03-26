@@ -8,14 +8,20 @@ import { FN_PARSE_PROMPT, FN_PARSE_PROMPT_AND_SUGGESTION, FN_PARSE_PROMPT_AND_SU
 import { AwareChat, IOpenAiChannel, isChatCompletionResponseMessage } from '../ai/openai';
 import { removeUnicode } from '../io/utils';
 import { writeYaml } from '../io/yamlWritter';
-import { IoRecord, Job, Prompt, ProvidedInput, SkippedInput } from '../types';
+import { IoRecord, Job, Prompt, PromptWithInfo, ProvidedInput, SkippedInput } from '../types';
 import { toCamelCase } from '../utils/strings';
 import { EOL } from 'os';
 import { promptTemplates } from '../io/promptTemplates';
+import { assert } from 'node:console';
 
 const getSubstringsByMask = require('get-substrings-by-mask');
 
+type Io = 'input' | 'output'
 
+interface RecordHistory {
+    history: IoRecord[]
+    job: Job
+}
 /**
  * LLM section
  */
@@ -29,6 +35,7 @@ export const COMMAND_CLI_APP = 'You are an assistant that captures the input and
  */
 export class CliLearnObserver implements IOpenAiChannel {
     keybuffer: string[] = []
+    promptsTimeline: Record<number, any> = {}
     inputTimeline: Record<number, number[]> = {}
     outputTimeline: Record<number, string> = {}
     child_process: any
@@ -43,7 +50,10 @@ export class CliLearnObserver implements IOpenAiChannel {
     lastPromptKey: string = '';
     aiEnabled: boolean = false;
 
-    constructor(private args: string[], input?: string[]) {
+    constructor(private args: string[], input?: string[], private options?: {
+        aiEnabled?: boolean
+        beforeExit?: (history: RecordHistory, promptsTimeline: Record<number, any>) => void
+    }) {
         this.mutex = {
             default: new Mutex(),
             traceWindow: new Mutex(),
@@ -108,25 +118,17 @@ export class CliLearnObserver implements IOpenAiChannel {
             this.connectedAt = Date.now()
         })
 
-        // child.stdout.on('data', async (chunk: any) => {
-        //     // Ok, process the chunk
-        //     await this.processStdoutChunk(chunk)
-        // })
-
-
-
         child.stdout.pipe(process.stdout);
         child.stderr.pipe(process.stderr);
         emitKeypressEvents(process.stdin);
-        process.stdin.setRawMode(isRawMode);
+        // only available when the input is provided by a TTY
+        isRawMode && process.stdin.setRawMode(isRawMode);
         process.stdin.on('keypress', this.handleKeypress.bind(this))
         process.stdin.pipe(child.stdin);
 
         child.on('exit', () => {
-            this.dumpHistory()
-            process.exit()
+            this.beforeExit()
         })
-
 
         this.child_process = child
         const iterator = this.chunksPromptsToLinesAsync(this.child_process.stdout)
@@ -134,6 +136,22 @@ export class CliLearnObserver implements IOpenAiChannel {
         for await (const line of iterator) {
             this.processStdoutChunk(line)
         }
+
+        this.beforeExit()
+    }
+
+    beforeExit() {
+        const history = this.dumpHistory()
+        this.options?.beforeExit?.(history, this.promptsTimeline)
+        // write to file
+        const fileName = `${process.cwd()}/axo.yaml`;
+        this.writeAxoFile(fileName, history);
+        // end gracefully
+        // process.exit()
+    }
+
+    private writeAxoFile(fileName: string, history: RecordHistory) {
+        writeYaml(fileName, { jobs: [history.job] });
     }
 
     async *chunksPromptsToLinesAsync(
@@ -176,70 +194,72 @@ export class CliLearnObserver implements IOpenAiChannel {
 
     private async processStdout(stdoutChunk: any) {
 
-        // console.log(chalk.blue(stdoutChunk.toString()))
-
         const data = chomp(stdoutChunk.toString());
-        this.lastOutputAt = Date.now();
-        // 
+        const timestamp = Date.now();
+        this.lastOutputAt = timestamp
 
-        const promptIndex = data.indexOf(":")
         // Need a reliable way to detect if the chunk contains a prompt
-        let isPrompt = false
-        let promptString = ''
-
-        console.log(chalk.gray(`\n checking for ${data} \n `))
-
-        for (const pp of promptTemplates) {
-            const substr = getSubstringsByMask(pp, data)
-            if (!substr || typeof substr === 'undefined') {
-                continue
-            }
-            console.log(chalk.gray('pp ' + pp, JSON.stringify({ substr }, null, 2)))
-            const { prompt: promptValue, default: defaultValue } = substr
-            promptString = promptValue
-            isPrompt = promptValue && promptValue.length > 0
-            if (isPrompt) {
-                break
-            }
-        }
+        // console.log(chalk.gray(`\n checking for ${data} \n `))
+        const { isPrompt, promptString, hasDefault, promptDefault } = this.isAPrompt(data)
 
         if (!isPrompt) {
             await this.disableQuestionTraceWindow()
             return
         }
 
-
         const promptKey = toCamelCase(promptString)
         this.lastPromptKey = promptKey
+        const providedInput = this.input[promptKey]
+
+        // record
+        this.outputTimeline[timestamp] = data;
+
+        // store prompt
+        this.promptsTimeline[timestamp] = { data, promptString, hasDefault, promptDefault };
+
+        // Begin the input checking process
+        if (providedInput) {
+            this.outputTimeline[timestamp] = promptKey;
+            // console.log(chalk.gray(`Input for ${promptKey} =`, providedInput))
+            // pass the output to the child process
+            this.child_process.stdin.write(providedInput + '\n')
+            this.processInputLine({
+                key: promptKey,
+                value: providedInput,
+                default: false,
+                timestamp
+            } as ProvidedInput)
+            return
+        }
+
+        // Use defaults if available 
+        if (hasDefault) {
+            this.outputTimeline[this.lastOutputAt] = promptKey;
+            // @todo introduce setting to enable/disable default values
+            this.child_process.stdin.write(`\n`)
+            this.processInputLine({
+                key: promptKey,
+                value: '\n',
+                default: true,
+                timestamp
+            } as ProvidedInput)
+            return
+        }
+
+        // Begin the interactive process
+        // @todo introduce setting to enable/disable the interactive process
         await this.disableQuestionTraceWindow()
         await this.enableQuestionTraceWindow()
         await this.enableQuestionTrace()
+        // console.log(chalk.gray('<- Checking for input', promptKey))
 
-        // // Keep the conversation going
-        // await this.gptChat.chat(data)
-
-
-        console.log(chalk.gray('<- Checking for input', promptKey))
-        // At this point the user has not indicated if this is an input or an output
-
-        const providedInput = this.input[promptKey]
-
-        if (providedInput) {
-            this.outputTimeline[this.lastOutputAt] = promptKey;
-            console.log(chalk.gray(`Input for ${promptKey} =`, providedInput))
-            // pass the output to the child process
-            this.child_process.stdin.write(providedInput + '\n')
-            this.processInputLine(providedInput)
-            return
-        } else {
-            this.outputTimeline[this.lastOutputAt] = data;
-        }
-
+        // Begin the AI process
+        // @todo introduce setting to enable/disable the AI process
         if (this.aiEnabled) {
             // OpenAI API call
             const parsed = await this.gptChat.parseOutputWithNlp(data)
 
-            console.log(chalk.gray(`Parsed call`, JSON.stringify(parsed, null, 2)))
+            // console.log(chalk.gray(`Parsed call`, JSON.stringify(parsed, null, 2)))
 
             // @todo handle parsed output and handle function calling
             if (parsed && isChatCompletionResponseMessage(parsed.message) && parsed.finish_reason === 'function_call') {
@@ -276,6 +296,30 @@ export class CliLearnObserver implements IOpenAiChannel {
 
 
     }
+    private isAPrompt(data: string) {
+        let isPrompt = false
+        let hasDefault = false
+        let promptString = ''
+        let promptDefault = ''
+        for (const pp of promptTemplates) {
+            const substr = getSubstringsByMask(pp, data);
+            if (!substr || typeof substr === 'undefined') {
+                continue;
+            }
+            const { prompt: promptValue, default: defaultValue } = substr;
+            isPrompt = promptValue && promptValue.length > 0;
+            if (isPrompt) {
+                promptString = promptValue;
+                hasDefault = defaultValue && defaultValue.length > 0;
+                if (hasDefault) {
+                    promptDefault = defaultValue;
+                }
+                break;
+            }
+        }
+        return { isPrompt, hasDefault, promptString, promptDefault };
+    }
+
     async enableQuestionTraceWindow() {
         if (this.mutex['traceWindow'].isLocked()) {
             throw new Error('Cannot enable question trace window, it is already enabled')
@@ -290,16 +334,11 @@ export class CliLearnObserver implements IOpenAiChannel {
     }
 
     private async enableQuestionTrace() {
-        // console.log("enableQuestionTrace")
         this.questionTrace = true
         await this.lock('stdout')
-        // setTimeout(this.disableQuestionTrace.bind(this), 5000)
-        // await this.mutex['stdout'].waitForUnlock()
     }
     private async disableQuestionTrace() {
-        // console.log("--disableQuestionTrace--")
         this.questionTrace = false
-        // // release the mutex
         await this.release('stdout')
     }
 
@@ -312,7 +351,7 @@ export class CliLearnObserver implements IOpenAiChannel {
 
         return mergedSortKeys.map((value, index: number) => {
             const accessKey = value as unknown as number
-            let type: 'input' | 'output' = 'input'
+            let type: Io
             let timelineItem: string | number[] = this.inputTimeline[accessKey] ?? this.outputTimeline[accessKey]
             if (Array.isArray(timelineItem)) { //input keys
                 type = 'input'
@@ -338,15 +377,14 @@ export class CliLearnObserver implements IOpenAiChannel {
      * 
      */
     private async handleKeypress(str: any, key: { sequence: string, name: string, ctrl: boolean }) {
-        // console.log(chalk.yellow('handleKeypress:', key))
         if (this.isExitCombination(key)) {
             console.log('Bye')
-            this.dumpHistory()
+            this.beforeExit()
             process.exit()
         }
         if (this.mutex['traceWindow'].isLocked() && this.isTrackingHint(key)) {
             console.log('tracking hint', this.lastPromptKey)
-            console.log('input buffer', this.getBufferInput())
+            // console.log('input buffer', this.getBufferInput())
             // we're done with the trace window
             await this.disableQuestionTraceWindow()
             return
@@ -357,8 +395,8 @@ export class CliLearnObserver implements IOpenAiChannel {
             process.exit();
         } else if (key.name === 'backspace') {
             this.keybuffer.splice(- 1, 1)
-            process.stdout.clearLine(0)
-            process.stdout.cursorTo(0)
+            process.stdout.clearLine && process.stdout.clearLine(0)
+            process.stdout.cursorTo && process.stdout.cursorTo(0)
             const input = chomp(this.keybuffer.join('')).replace(/\r*/, '')
             const stdout = this.outputTimeline[this.lastOutputAt]
             this.child_process.stdin.write(key.sequence)
@@ -400,11 +438,19 @@ export class CliLearnObserver implements IOpenAiChannel {
         return key.ctrl
     }
 
-    private dumpHistory() {
-        process.stdout.clearLine(0)
-        process.stdout.cursorTo(0)
+    private dumpHistory(): RecordHistory {
+        process.stdout.clearLine && process.stdout.clearLine(0)
+        process.stdout.cursorTo && process.stdout.cursorTo(0)
         const history = this.mergeHistory()
-        // console.log('history', JSON.stringify(history, null, 2))
+
+        const prompts = Object.keys(this.promptsTimeline).map((timestamp: string) => {
+            const { data, promptString, hasDefault, promptDefault } = this.promptsTimeline[parseInt(timestamp)]
+            return {
+                name: hasDefault ? promptString : data,
+                skip: hasDefault,
+            } as PromptWithInfo
+        })
+
         const job: Job = {
             id: 'axo',
             command: this.args[0],
@@ -420,55 +466,39 @@ export class CliLearnObserver implements IOpenAiChannel {
             //     startedAt: this.connectedAt
             // },
             interaction: {
-                prompts: history
-                    .filter((record) => record.props.type === 'input')
-                    .map((record) => {
-                        const { previousNeighbor } = record.props
-                        const { timestamp } = record.props
-                        let value: string | undefined = record.props.value
-                        let skip = false
-                        let name = 'prompt'
-                        if (previousNeighbor) {
-                            name = removeUnicode(history[previousNeighbor.index].props.value)
-                        }
-                        if (value === '\t\r' || value === '\n') {
-                            value = undefined
-                            skip = true
-                        }
-                        return {
-                            name,
-                            skip,
-                            value,
-                            timestamp
-                        } as Prompt
-                    }),
+                prompts,
                 attention: []
             }
         }
-        const file = `${process.cwd()}/axo.yaml`
-        writeYaml(file, { jobs: [job] })
-        // console.log('Wrote job to', file)
+        return {
+            history,
+            job
+        }
     }
 
     private recordLine({ line }: { line: string | ProvidedInput | SkippedInput; }) {
         const timestamp = Date.now()
         const isLineString = (line: any): line is string => typeof line === 'string'
-        const isProvidedInput = (line: any): line is ProvidedInput => typeof line === 'object' && 'key' in line && 'value' in line
+        const isProvidedInput = (line: any): line is ProvidedInput => {
+            return typeof line === 'object' && Object.keys(line).sort() === ['key', 'value', 'timestamp'].sort()
+        }
+
+        assert(!this.inputTimeline[timestamp], 'Timestamp already exists')
 
         if (isLineString(line)) {
             this.inputTimeline[timestamp] = line.split('').map((c: string) => c.charCodeAt(0))
         } else if (isProvidedInput(line)) {
             // in the case of a provided input
             // we should store that input along the key and the timestamp
-            const { key, value } = line
-            this.inputTimeline[timestamp] = value.split('').map((c: string) => c.charCodeAt(0))
+            const { key, value, timestamp: when } = line
+            this.inputTimeline[when] = value.split('').map((c: string) => c.charCodeAt(0))
         } else {
             // @todo handle skipped input
             console.log('Skipped input', line)
         }
     }
 
-    private processInputLine(line: any) {
+    private processInputLine(line: string | ProvidedInput | SkippedInput) {
         this.recordLine({ line })
     }
 }

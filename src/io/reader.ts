@@ -110,8 +110,6 @@ export class CliReader {
         }
         let previous = ''
 
-        
-
         const settings = this.params.job.settings
         const exitOnMatch = settings.exitOnMatch
         const exitOnMatchIsString = isString(exitOnMatch)
@@ -124,15 +122,13 @@ export class CliReader {
 
             previous += chunk
 
-            this.logger.debug('chunk', chunk.toString())
+            // this.logger.debug('chunk', chunk.toString())
 
             // strip away the color of the terminal
             // along any unicode characters
             let clean = removeUnicode(chunk.toString())
 
             let lines = clean.split(EOL).map((l: string) => chomp(l.trim()))
-
-            // this.logger.debug('clean line', lines)
 
             while (lines.length > 0) {
                 const line = lines.shift()
@@ -207,6 +203,21 @@ export class CliReader {
         this.child_process = child_process.spawn(job.command, job.params, {
             shell: false,
             stdio: ['pipe', 'pipe', 'pipe'],
+        })
+
+        this.child_process.stdout?.pipe(process.stdout);
+        this.child_process.stderr?.pipe(process.stderr);
+        
+        this.child_process.on('close', (code) => {
+            console.log(`child process exited with code ${code}`);
+          }); 
+
+        this.child_process.on('error', () => {
+            this.logger.debug(chalk.yellow(`[ERROR]`))
+        })
+        
+        this.child_process.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+            this.logger.debug(chalk.yellow(`[EXIT] ${code}`))
         })
 
         let response = {}
@@ -326,6 +337,8 @@ export class CliReader {
 
         // It is important to wait for the process to exit
         await onExit(this.child_process)
+
+        
     }
 
     async handlePrompt(question: string, answer: string, hidden?: boolean) {

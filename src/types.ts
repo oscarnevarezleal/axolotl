@@ -76,6 +76,7 @@ export class IoRecord {
 export type ProvidedInput = {
     key: string
     value: string
+    timestamp: number
 }
 export type SkippedInput = {
     key: string
